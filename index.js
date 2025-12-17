@@ -228,7 +228,159 @@ async function run() {
         });
     });
 
+    // Public search for donors
+    app.get('/search-donors', async (req, res) => {
+        const bloodGroup = req.query.bloodGroup;
+        const division = req.query.division;
+        const district = req.query.district;
+        const upazila = req.query.upazila;
+
+        const query = { role: 'donor', status: 'active' };
+        if (bloodGroup) query.bloodGroup = bloodGroup;
+        if (division) query.division = division;
+        if (district) query.district = district;
+        if (upazila) query.upazila = upazila;
+
+        const result = await userCollection.find(query).project({ 
+            name: 1, 
+            bloodGroup: 1, 
+            division: 1,
+            district: 1, 
+            upazila: 1, 
+            photo: 1 // Optional: Display avatar, but not contact
+        }).toArray();
+        res.send(result);
+    });
+
+    app.get('/donation-requests/all', verifyToken, async (req, res) => {
+        const email = req.decoded.email;
+        const user = await userCollection.findOne({ email: email });
+        
+        if (user.role !== 'admin' && user.role !== 'volunteer') {
+             return res.status(403).send({ message: 'forbidden access' });
+        }
+        
+        const result = await requestCollection.find().sort({ donationDate: -1 }).toArray();
+        res.send(result);
+    });
+
+    app.get('/donation-requests', async (req, res) => {
+        const email = req.query.email;
+        let query = {};
+        if (email) {
+            query = { requesterEmail: email }
+        } else {
+            // If no email, assume public request -> pending only
+            // But we should probably allow admin to see all.
+            // For simplicity, let's treat "no email" as public "pending" requests list.
+            // Or add explicit ?public=true
+            query = { status: 'pending' };
+        }
+        const result = await requestCollection.find(query).sort({ donationDate: 1 }).toArray();
+        res.send(result);
+    });
+
+    app.delete('/donation-requests/:id', async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await requestCollection.deleteOne(query);
+        res.send(result);
+    });
+
+    app.patch('/donation-requests/:id', async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: req.body
+        }
+        const result = await requestCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    })
     
+    app.get('/donation-requests/:id', async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await requestCollection.findOne(query);
+        res.send(result);
+    });
+
+
+
+
+    
+    // Blog Collection
+    const blogCollection = database.collection("blogs");
+
+    // Create Blog
+    app.post('/blogs', verifyToken, async (req, res) => {
+        const blog = req.body;
+        blog.date = new Date().toISOString();
+        const result = await blogCollection.insertOne(blog);
+        res.send(result);
+    });
+
+    // Get All Blogs (Admin/Volunteer)
+    app.get('/blogs', verifyToken, async (req, res) => {
+        const result = await blogCollection.find().sort({ date: -1 }).toArray();
+        res.send(result);
+    });
+
+    // Get Published Blogs (Public)
+    app.get('/blogs/published', async (req, res) => {
+        const result = await blogCollection.find({ status: 'published' }).sort({ date: -1 }).toArray();
+        res.send(result);
+    });
+
+    // Get Single Blog (Public)
+    app.get('/blogs/:id', async (req, res) => {
+        const id = req.params.id;
+        try {
+            const query = { _id: new ObjectId(id) };
+            const result = await blogCollection.findOne(query);
+            res.send(result);
+        } catch (error) {
+            res.status(404).send({ message: "Blog not found" });
+        }
+    });
+
+    // Delete Blog
+    app.delete('/blogs/:id', verifyToken, async (req, res) => {
+        const id = req.params.id;
+        const query = { _id: new ObjectId(id) };
+        const result = await blogCollection.deleteOne(query);
+        res.send(result);
+    });
+
+    // Update Blog Status
+    app.patch('/blogs/:id/status', verifyToken, async (req, res) => {
+        const id = req.params.id;
+        const status = req.body.status;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: { status: status }
+        };
+        const result = await blogCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    });
+
+    // Update Blog Content
+    app.put('/blogs/:id', verifyToken, async (req, res) => {
+        const id = req.params.id;
+        const blog = req.body;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: {
+                title: blog.title,
+                thumbnail: blog.thumbnail,
+                content: blog.content,
+                status: blog.status
+            }
+        };
+        const result = await blogCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    });
+
+
 
   } finally {
     // Ensures that the client will close when you finish/error
