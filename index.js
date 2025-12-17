@@ -125,6 +125,59 @@ async function run() {
         res.send(result);
     })
 
+    // Make volunteer
+    app.patch('/users/volunteer/:id', verifyToken, verifyAdmin, async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: {
+                role: 'Volunteer'
+            }
+        }
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    })
+
+    // Get specific user by email
+    app.get('/users/:email', verifyToken, async (req, res) => {
+        const email = req.params.email;
+        if (email !== req.decoded.email) {
+            return res.status(403).send({ message: 'forbidden access' })
+        }
+        const query = { email: email };
+        const user = await userCollection.findOne(query);
+        res.send(user);
+    })
+
+    app.patch('/users/:id', verifyToken, async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const user = req.body;
+        // prevent role/status update here
+        delete user.role;
+        delete user.status;
+        
+        const updatedDoc = {
+            $set: user
+        }
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    });
+
+    const requestCollection = database.collection("donationRequests");
+
+    app.post('/donation-requests', verifyToken, async (req, res) => {
+        const request = req.body;
+        const email = req.decoded.email;
+        const query = { email: email };
+        const user = await userCollection.findOne(query);
+        if (user?.status === 'blocked') {
+            return res.status(403).send({ message: 'forbidden: user is blocked' });
+        }
+        const result = await requestCollection.insertOne(request);
+        res.send(result);
+    });
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
