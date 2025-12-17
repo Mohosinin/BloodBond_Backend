@@ -99,6 +99,32 @@ async function run() {
         res.send(result);
     })
 
+     // Update user status
+    app.patch('/users/status/:id', verifyToken, verifyAdmin, async (req, res) => {
+        const id = req.params.id;
+        const status = req.body.status;
+        const query = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: {
+                status: status
+            }
+        }
+        const result = await userCollection.updateOne(query, updatedDoc);
+        res.send(result);
+    })
+
+    app.patch('/users/admin/:id', verifyToken, verifyAdmin, async (req, res) => {
+        const id = req.params.id;
+        const filter = { _id: new ObjectId(id) };
+        const updatedDoc = {
+            $set: {
+                role: 'Admin'
+            }
+        }
+        const result = await userCollection.updateOne(filter, updatedDoc);
+        res.send(result);
+    })
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
