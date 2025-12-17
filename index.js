@@ -178,6 +178,40 @@ async function run() {
         res.send(result);
     });
 
+    // Stripe Payment Intent
+    app.post('/create-payment-intent', verifyToken, async(req, res) => {
+        const { price } = req.body;
+        const amount = parseInt(price * 100);
+        
+        if(!price || amount < 1) return res.send({ clientSecret: null });
+
+        const paymentIntent = await stripe.paymentIntents.create({
+            amount: amount,
+            currency: 'bdt',
+            payment_method_types: ['card']
+        });
+
+        res.send({
+            clientSecret: paymentIntent.client_secret
+        });
+    });
+
+    // Funding Collection
+    const fundingCollection = database.collection("funding");
+
+    // Save Funding
+    app.post('/funding', verifyToken, async(req, res) => {
+        const funding = req.body;
+        const result = await fundingCollection.insertOne(funding);
+        res.send(result);
+    });
+
+    // Get Funding
+    app.get('/funding', verifyToken, async(req, res) => {
+        const result = await fundingCollection.find().sort({ date: -1 }).toArray();
+        res.send(result);
+    });
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
