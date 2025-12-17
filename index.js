@@ -212,6 +212,24 @@ async function run() {
         res.send(result);
     });
 
+    // Admin Stats
+    app.get('/admin/stats-summary', verifyToken, async (req, res) => {
+        const totalUsers = await userCollection.estimatedDocumentCount();
+        const totalRequests = await requestCollection.estimatedDocumentCount();
+        
+        // Calculate total funding
+        const payments = await fundingCollection.find().toArray();
+        const totalFunding = payments.reduce((sum, payment) => sum + payment.amount, 0);
+        
+        res.send({
+            totalUsers,
+            totalRequests,
+            totalFunding
+        });
+    });
+
+    
+
   } finally {
     // Ensures that the client will close when you finish/error
     // await client.close();
