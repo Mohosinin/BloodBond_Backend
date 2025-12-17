@@ -9,7 +9,13 @@ const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
 
 // middleware
-app.use(cors());
+app.use(cors({
+    origin: [
+        'http://localhost:5173',
+        'https://blood-bond-client-two.vercel.app'
+    ],
+    credentials: true
+}));
 app.use(express.json());
 
 const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.yucxzfy.mongodb.net/?appName=Cluster0`;
