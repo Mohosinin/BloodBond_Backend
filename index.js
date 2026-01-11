@@ -3,10 +3,27 @@ const cors = require('cors');
 const { MongoClient, ServerApiVersion, ObjectId } = require('mongodb');
 require('dotenv').config();
 const jwt = require('jsonwebtoken');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const rateLimit = require('express-rate-limit');
 
 const app = express();
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const port = process.env.PORT || 5000;
+
+// Security Middleware
+app.use(helmet());
+
+// Logging
+app.use(morgan('dev'));
+
+// Rate Limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100, // limit each IP to 100 requests per windowMs
+    message: 'Too many requests from this IP, please try again later.'
+});
+app.use(limiter);
 
 // middleware
 app.use(cors({
@@ -65,7 +82,7 @@ async function run() {
         const email = req.decoded.email;
         const query = { email: email };
         const user = await userCollection.findOne(query);
-        const isAdmin = user?.role === 'admin';
+        const isAdmin = user?.role === 'Admin';
         if (!isAdmin) {
             return res.status(403).send({ message: 'forbidden access' });
         }
@@ -87,8 +104,11 @@ async function run() {
         res.send({ role });
     })
 
-     app.post('/users', async (req, res) => {
+    app.post('/users', async (req, res) => {
         const user = req.body;
+        
+
+
         // insert email if user doesn't exists: 
         // you can do this many ways (1. email unique, 2. upsert 3. simple checking)
         const query = { email: user.email }
@@ -98,6 +118,83 @@ async function run() {
         }
         const result = await userCollection.insertOne(user);
         res.send(result);
+    });
+
+    // Get all donors (public endpoint - for Find Donors page)
+    app.get('/users/donors', async (req, res) => {
+        try {
+            // Fetch all users - they are all potential donors
+            // Less restrictive filter to include all users with blood group info
+            const donors = await userCollection.find({
+                bloodGroup: { $exists: true, $ne: '' }
+            }).project({
+                name: 1,
+                email: 1,
+                avatar: 1,
+                photo: 1,
+                bloodGroup: 1,
+                division: 1,
+                district: 1,
+                upazila: 1,
+                status: 1,
+                role: 1
+            }).toArray();
+            
+            // If no donors with bloodGroup, return all users
+            if (donors.length === 0) {
+                const allUsers = await userCollection.find({}).project({
+                    name: 1,
+                    email: 1,
+                    avatar: 1,
+                    photo: 1,
+                    bloodGroup: 1,
+                    division: 1,
+                    district: 1,
+                    upazila: 1,
+                    status: 1,
+                    role: 1
+                }).toArray();
+                return res.send(allUsers);
+            }
+            
+            res.send(donors);
+        } catch (error) {
+            console.error('Error fetching donors:', error);
+            res.status(500).send({ message: 'Error fetching donors' });
+        }
+    });
+
+    // Search donors with optional filters (public endpoint)
+    app.get('/search-donors', async (req, res) => {
+        try {
+            const { bloodGroup, division } = req.query;
+            let query = {};
+            
+            if (bloodGroup) {
+                query.bloodGroup = bloodGroup;
+            }
+            if (division) {
+                query.division = { $regex: new RegExp(division, 'i') };
+            }
+            
+            const donors = await userCollection.find(query).project({
+                name: 1,
+                email: 1,
+                avatar: 1,
+                photo: 1,
+                bloodGroup: 1,
+                division: 1,
+                district: 1,
+                upazila: 1,
+                status: 1,
+                role: 1
+            }).toArray();
+            
+            res.send(donors);
+        } catch (error) {
+            console.error('Error searching donors:', error);
+            res.status(500).send({ message: 'Error searching donors' });
+        }
     });
 
     app.get('/users', verifyToken, verifyAdmin, async (req, res) => {
@@ -234,6 +331,117 @@ async function run() {
         });
     });
 
+    // Analytics - Blood Type Distribution
+    app.get('/admin/analytics/blood-types', verifyToken, async (req, res) => {
+        try {
+            const bloodTypeStats = await userCollection.aggregate([
+                { $match: { role: 'donor', status: 'active' } },
+                { $group: { _id: '$bloodGroup', count: { $sum: 1 } } },
+                { $sort: { count: -1 } }
+            ]).toArray();
+            
+            const result = bloodTypeStats.map(item => ({
+                bloodGroup: item._id || 'Unknown',
+                count: item.count
+            }));
+            
+            res.send(result);
+        } catch (error) {
+            res.status(500).send({ message: 'Error fetching blood type stats' });
+        }
+    });
+
+    // Analytics - Monthly Donation Stats
+    app.get('/admin/analytics/monthly-stats', verifyToken, async (req, res) => {
+        try {
+            const requests = await requestCollection.find().toArray();
+            
+            // Group by month (using donationDate)
+            const monthlyStats = {};
+            requests.forEach(req => {
+                const date = new Date(req.donationDate);
+                const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+                
+                if (!monthlyStats[monthKey]) {
+                    monthlyStats[monthKey] = { donations: 0, requests: 0 };
+                }
+                monthlyStats[monthKey].requests++;
+                if (req.status === 'done') {
+                    monthlyStats[monthKey].donations++;
+                }
+            });
+            
+            // Convert to array and sort
+            const result = Object.entries(monthlyStats)
+                .map(([month, stats]) => ({ month, ...stats }))
+                .sort((a, b) => a.month.localeCompare(b.month))
+                .slice(-12); // Last 12 months
+            
+            res.send(result);
+        } catch (error) {
+            res.status(500).send({ message: 'Error fetching monthly stats' });
+        }
+    });
+
+    // Analytics - Request Status Distribution
+    app.get('/admin/analytics/request-status', verifyToken, async (req, res) => {
+        try {
+            const statusStats = await requestCollection.aggregate([
+                { $group: { _id: '$status', count: { $sum: 1 } } }
+            ]).toArray();
+            
+            const result = statusStats.map(item => ({
+                status: item._id || 'Unknown',
+                count: item.count
+            }));
+            
+            res.send(result);
+        } catch (error) {
+            res.status(500).send({ message: 'Error fetching status stats' });
+        }
+    });
+
+    // Donation requests with pagination and filtering
+    app.get('/donation-requests/paginated', async (req, res) => {
+        try {
+            const page = parseInt(req.query.page) || 1;
+            const limit = parseInt(req.query.limit) || 6;
+            const skip = (page - 1) * limit;
+            
+            // Filtering
+            const bloodGroup = req.query.bloodGroup;
+            const district = req.query.district;
+            const status = req.query.status || 'pending';
+            const sortBy = req.query.sortBy || 'donationDate';
+            const sortOrder = req.query.sortOrder === 'desc' ? -1 : 1;
+            
+            let query = {};
+            if (status) query.status = status;
+            if (bloodGroup && bloodGroup !== 'all') query.bloodGroup = bloodGroup;
+            if (district && district !== 'all') query.recipientDistrict = district;
+            
+            const total = await requestCollection.countDocuments(query);
+            const requests = await requestCollection
+                .find(query)
+                .sort({ [sortBy]: sortOrder })
+                .skip(skip)
+                .limit(limit)
+                .toArray();
+            
+            res.send({
+                requests,
+                pagination: {
+                    currentPage: page,
+                    totalPages: Math.ceil(total / limit),
+                    totalItems: total,
+                    itemsPerPage: limit
+                }
+            });
+        } catch (error) {
+            res.status(500).send({ message: 'Error fetching requests' });
+        }
+    });
+
     // Public search for donors
     app.get('/search-donors', async (req, res) => {
         const bloodGroup = req.query.bloodGroup;
@@ -262,7 +470,7 @@ async function run() {
         const email = req.decoded.email;
         const user = await userCollection.findOne({ email: email });
         
-        if (user.role !== 'admin' && user.role !== 'volunteer') {
+        if (user.role !== 'Admin' && user.role !== 'admin' && user.role !== 'Volunteer' && user.role !== 'volunteer') {
              return res.status(403).send({ message: 'forbidden access' });
         }
         
